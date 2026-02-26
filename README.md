@@ -50,4 +50,5 @@ static location locationInfo;
     return 0;
 }
 ```
-### Результаты работы:
+# Результаты работы:<img width="417" height="335" alt="Снимок экрана 2026-02-27 012753" src="https://github.com/user-attachments/assets/1e16cfee-ddaf-46bd-88a3-c584a5aad4e8" />
+ьтаты работы:
