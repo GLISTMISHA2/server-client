@@ -9,6 +9,8 @@ set(THIRD_PARTY_DIR ${PROJECT_SOURCE_DIR}/third_party)
 set(SRC_DIR ${PROJECT_SOURCE_DIR}/src)
 set(INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
+find_package(PostgreSQL REQUIRED)
+
 find_package(SDL2 REQUIRED)
 include_directories(${SDL2_INCLUDE_DIRS})
 
@@ -20,18 +22,17 @@ pkg_check_modules(ZMQ REQUIRED libzmq)
 include_directories(${ZMQ_INCLUDE_DIRS})
 link_directories(${ZMQ_LIBRARY_DIRS})
 
+
+find_package(CURL REQUIRED)
+
 find_path(NLOHMANN_JSON_INCLUDE_DIR
     NAMES nlohmann/json.hpp
     PATHS /usr/include /usr/local/include /usr/include/nlohmann
 )
-if(NOT NLOHMANN_JSON_INCLUDE_DIR)
-    pkg_check_modules(PC_NLOHMANN_JSON QUIET nlohmann_json)
-    find_path(NLOHMANN_JSON_INCLUDE_DIR
-        NAMES nlohmann/json.hpp
-        PATHS ${PC_NLOHMANN_JSON_INCLUDE_DIRS}
-    )
-endif()
 include_directories(${NLOHMANN_JSON_INCLUDE_DIR})
+
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE ${THIRD_PARTY_DIR}/stb)
 
 add_library(imgui STATIC
     ${THIRD_PARTY_DIR}/imgui/imgui.cpp
@@ -64,10 +65,13 @@ find_package(Threads REQUIRED)
 target_link_libraries(main PRIVATE
     imgui
     implot
+    PostgreSQL::PostgreSQL
     ${SDL2_LIBRARIES}
     ${OPENGL_LIBRARIES}
     ${GLEW_LIBRARIES}
     ${ZMQ_LIBRARIES}
+    CURL::libcurl
+    stb
     Threads::Threads
 )
 
@@ -77,6 +81,7 @@ endif()
 
 target_include_directories(main PRIVATE
     ${INCLUDE_DIR}
+    ${PostgreSQL_INCLUDE_DIRS}
     ${ZMQ_INCLUDE_DIRS}
     ${NLOHMANN_JSON_INCLUDE_DIR}
     ${SDL2_INCLUDE_DIRS}
@@ -86,4 +91,5 @@ target_include_directories(main PRIVATE
 
 target_compile_definitions(main PRIVATE
     _GLIBCXX_USE_CXX11_ABI=1
+    STB_IMAGE_IMPLEMENTATION
 )

@@ -51,3 +51,4 @@ static location locationInfo;
 }
 ```
 ### Результаты работы:
+![alt text](image-1.png)
