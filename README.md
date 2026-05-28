@@ -44,6 +44,7 @@
 
 ## Результаты
 
+<img width="1099" height="929" alt="image" src="https://github.com/user-attachments/assets/1a7fc1db-3eba-470e-b9e2-ebccabb42397" />
 
 
 
