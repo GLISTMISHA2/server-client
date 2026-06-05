@@ -1,3 +1,4 @@
+#include "stb_image.h"
 #include "map.h"
 #include <cmath>
 #include <filesystem>
@@ -7,10 +8,11 @@
 #include <thread>
 #include <algorithm>
 #include <curl/curl.h>
-#include <stb_image.h>
+#include <iostream>
+
 #include <implot.h>
 #include "types.h"
-
+#include "heatmap.h"
 int g_mapZoom = 16;
 double g_mapCenterLat = 55.013; 
 double g_mapCenterLon = 82.950;
@@ -114,58 +116,71 @@ void tile_loader_thread() {
 void renderTiles(int winW, int winH) {
     double cx = lon2x(g_mapCenterLon, g_mapZoom);
     double cy = lat2y(g_mapCenterLat, g_mapZoom);
-    int tilesX = (winW / 256); 
-    int tilesY = (winH / 256); 
-    int startX = floor(cx) - tilesX / 2;
-    int startY = floor(cy) - tilesY / 2;
-    for (int tx = startX; tx < startX + tilesX; tx++) {
-        for (int ty = startY; ty < startY + tilesY; ty++) {
+    int tilesX = (winW / 256) + 2;
+    int tilesY = (winH / 256) + 2;
+    int maxTile = (1 << g_mapZoom) - 1;
+    int startX = std::clamp((int)std::floor(cx) - tilesX / 2, 0, maxTile);
+    int startY = std::clamp((int)std::floor(cy) - tilesY / 2, 0, maxTile);
+
+    for (int tx = startX; tx < startX + tilesX && tx <= maxTile; tx++) {
+        for (int ty = startY; ty < startY + tilesY && ty <= maxTile; ty++) {
             std::string tileId = std::to_string(g_mapZoom) + "/" + std::to_string(tx) + "/" + std::to_string(ty);
-            
+            std::string heatId = tileId + "_heat";
+
             g_tileCacheMutex.lock();
             if (g_tileCache.find(tileId) == g_tileCache.end()) {
                 g_tileQueueMutex.lock();
                 g_tileQueue.push({tileId, g_mapZoom, tx, ty});
                 g_tileQueueMutex.unlock();
+                g_tileCache[tileId] = TextureData{}; 
             }
-            
-            GLuint id = g_tileCache[tileId].id;
+            GLuint osmId = g_tileCache[tileId].id;
             g_tileCacheMutex.unlock();
 
-            if (id != 0) {
-                ImPlot::PlotImage(tileId.c_str(), (ImTextureID)(intptr_t)id,
-                    ImPlotPoint{x2lon(tx, g_mapZoom), y2lat(ty + 1, g_mapZoom)},
-                    ImPlotPoint{x2lon(tx + 1, g_mapZoom), y2lat(ty, g_mapZoom)});
-            }
-    }
-
-}
-if (!g_loadedLocations.empty()) {
-        for (const auto& loc : g_loadedLocations) {
-
-            int rsrp = -140; 
-            if (!loc.towers.empty()) {
-                rsrp = loc.towers[0].rsrp;
-            }
-
-            ImVec4 color;
-            if (rsrp >= -85) {
-                color = ImVec4(0.0f, 1.0f, 0.0f, 0.8f);
-            } else if (rsrp <= -115) {
-                color = ImVec4(1.0f, 0.0f, 0.0f, 0.8f);
-            } else {
-                float factor = (rsrp - (-115)) / 30.0f;
-                color = ImVec4(1.0f - factor, factor, 0.0f, 0.8f);
-            }
-
-            ImPlot::SetNextMarkerStyle(ImPlotMarker_Circle, 5.0f, color, 1.0f, color);
+            ImPlotPoint boundsMin = ImPlotPoint{x2lon(tx, g_mapZoom), y2lat(ty + 1, g_mapZoom)};
+            ImPlotPoint boundsMax = ImPlotPoint{x2lon(tx + 1, g_mapZoom), y2lat(ty, g_mapZoom)};
             
-            double plotX = loc.lon;
-            double plotY = loc.lat;
+            if (osmId != 0) {
+                ImPlot::PlotImage(tileId.c_str(), (ImTextureID)(intptr_t)osmId, boundsMin, boundsMax);
+            }
 
-            ImPlot::PlotScatter("##json_nodes", &plotX, &plotY, 1);
+
+            g_tileCacheMutex.lock();
+            auto heatIt = g_tileCache.find(heatId);
+            bool needLoad = (heatIt == g_tileCache.end());
+            if (!needLoad && heatIt->second.id == 0 && heatIt->second.rgbaBlob.empty()) {
+                needLoad = true;
+            }
+            if (needLoad) {
+                std::string heatPath = "build/" + tileId + "_heat.png";
+                if (std::filesystem::exists(heatPath)) {
+                    g_tileCache[heatId] = TextureData{};
+                    int w, h, ch;
+                    unsigned char* data = stbi_load(heatPath.c_str(), &w, &h, &ch, 4);
+                    if (data) {
+                        g_tileCache[heatId].rgbaBlob.assign(data, data + w * h * 4);
+                        g_tileCache[heatId].width = w;
+                        g_tileCache[heatId].height = h;
+                        stbi_image_free(data);
+                    }
+                } else if (heatIt == g_tileCache.end()) {
+                    g_heatQueueMutex.lock();
+                    g_heatQueue.push({g_mapZoom, tx, ty});
+                    g_heatQueueMutex.unlock();
+                    g_tileCache[heatId] = TextureData{};
+                }
+            }
+            GLuint heatGLId = g_tileCache[heatId].id;
+            g_tileCacheMutex.unlock();
+
+            if (heatGLId != 0) {
+                ImPlot::PlotImage(heatId.c_str(), (ImTextureID)(intptr_t)heatGLId, boundsMin, boundsMax);
+            }
         }
     }
+
+
+    
 }
 
 void tileUpdate() {
