@@ -4,13 +4,28 @@
 #include <vector>
 #include <cmath>
 #include <string>
+#include <algorithm>
+#include <mutex>
+#include <filesystem>
+
+
+//НАдо бы переделать немного граыики. делать не через буфер а через массив 
+
+
+
+
+
 
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl2.h"
 #include "imgui.h"
 #include "implot.h"
 #include "map.h"
-#include <filesystem>
+#include "heatmap.h"
+
+extern std::vector<LocationData> g_loadedLocations;
+extern std::map<std::string, TextureData> g_tileCache;
+extern std::mutex g_tileCacheMutex;
 
 LocationData g_data;
 std::mutex g_mutex;
@@ -18,6 +33,39 @@ std::map<int, ScrollingBuffer> g_rsrp_buffers, g_rsrq_buffers, g_rssnr_buffers;
 std::mutex g_buffer_mutex;
 
 static ImVec4 g_colors[] = {{1,0,0,1}, {0,1,0,1}, {0,0,1,1}, {1,1,0,1}, {1,0,1,1}, {0,1,1,1}};
+
+static std::vector<int> getUniqueEarfcnList(const std::vector<LocationData>& points) {
+    std::vector<int> list;
+    for (const auto& pt : points) {
+        for (const auto& tw : pt.towers) {
+            if (std::find(list.begin(), list.end(), tw.earfcn) == list.end()) {
+                list.push_back(tw.earfcn);
+            }
+        }
+    }
+
+    std::sort(list.begin(), list.end());
+    return list;
+}
+
+static void resetHeatmapRenderCache() {
+    clearHeatmapQueue();
+    
+    std::lock_guard<std::mutex> lock(g_tileCacheMutex);
+    for (auto it = g_tileCache.begin(); it != g_tileCache.end();) {
+        if (it->first.find("_heat") != std::string::npos) {
+            if (it->second.id != 0) {
+                glDeleteTextures(1, &it->second.id);
+            }
+
+            std::string filePath = "build/" + it->first + ".png";
+            std::filesystem::remove(filePath);
+            it = g_tileCache.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
 
 void run_gui() {
     SDL_Init(SDL_INIT_VIDEO);
@@ -30,6 +78,12 @@ void run_gui() {
     ImPlot::CreateContext();
     ImGui_ImplSDL2_InitForOpenGL(w, gl); 
     ImGui_ImplOpenGL3_Init("#version 330");
+
+    std::vector<int> earfcnList = getUniqueEarfcnList(g_loadedLocations);
+    static int selectedEarfcnIdx = 0;
+    if (!earfcnList.empty()) {
+        g_selectedEarfcn = earfcnList[selectedEarfcnIdx];
+    }
 
     bool running = true;
     static float timer = 0;
@@ -47,6 +101,7 @@ void run_gui() {
         ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoResize);
 
         if (ImGui::BeginTabBar("Tabs")) {
+
             if (ImGui::BeginTabItem("Signal Graphs")) {
                 ImGui::Columns(2); ImGui::SetColumnWidth(0, 300);
                 LocationData loc; { std::lock_guard<std::mutex> lk(g_mutex); loc = g_data; }
@@ -74,12 +129,58 @@ void run_gui() {
                 };
                 plot("RSRP", g_rsrp_buffers, -140, -60);
                 plot("RSRQ", g_rsrq_buffers, -20, -3);
-                ImGui::Columns(1); ImGui::EndTabItem();
+                ImGui::Columns(1); 
+                ImGui::EndTabItem();
             }
 
             if (ImGui::BeginTabItem("OSM Map")) {
 
+                ImGui::Columns(2); 
+                ImGui::SetColumnWidth(0, 320);
+
+                ImGui::Text("Heatmap Engine Settings");
+                ImGui::Separator();
+                ImGui::Text("Loaded points: %zu", g_loadedLocations.size());
+                ImGui::Spacing();
+
+                const char* criteriaNames[] = { "RSRP (дБм)", "RSRQ (дБ)", "RSSI (дБм)", "Altitude (м)" };
+                int currentItem = static_cast<int>(g_currentCriterion);
+                if (ImGui::Combo("Criterion", &currentItem, criteriaNames, IM_ARRAYSIZE(criteriaNames))) {
+                    g_currentCriterion = currentItem;
+                    resetHeatmapRenderCache();
+                }
+                ImGui::Spacing();
+
+                if (!earfcnList.empty()) {
+                    if (ImGui::BeginCombo("Select EARFCN", std::to_string(earfcnList[selectedEarfcnIdx]).c_str())) {
+                        for (int n = 0; n < (int)earfcnList.size(); n++) {
+                            bool is_selected = (selectedEarfcnIdx == n);
+                            if (ImGui::Selectable(std::to_string(earfcnList[n]).c_str(), is_selected)) {
+                                selectedEarfcnIdx = n;
+                                g_selectedEarfcn = earfcnList[n];
+                                resetHeatmapRenderCache();
+                            }
+                            if (is_selected) {
+                                ImGui::SetItemDefaultFocus();
+                            }
+                        }
+                        ImGui::EndCombo();
+                    }
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Warning: No EARFCN data inside JSON!");
+                }
+                ImGui::Spacing();
+
+                if (ImGui::SliderFloat("Radius (m)", &g_interpolationRadius, 10.0f, 40.0f, "%.1f meters")) {
+                    resetHeatmapRenderCache();
+                }
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextDisabled("Thread pool: %zu jobs pending", g_heatQueue.size());
+
                 ImGui::NextColumn();
+                
                 ImVec2 sz = ImGui::GetContentRegionAvail();
                 if (ImPlot::BeginPlot("##Map", sz, ImPlotFlags_CanvasOnly)) {
                     ImPlot::SetupAxes(nullptr, nullptr, ImPlotAxisFlags_NoDecorations, ImPlotAxisFlags_NoDecorations);
@@ -95,6 +196,8 @@ void run_gui() {
 
                     ImPlot::EndPlot();
                 }
+                
+                ImGui::Columns(1);
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();

@@ -70,11 +70,6 @@ void loadAllSamplesFromJson(const std::string& filepath) {
         return;
     }
 
-    if (!root.contains("data") || !root["data"].is_array()) {
-        std::cout << "Неверный формат: отсутствует массив 'data'" << std::endl;
-        return;
-    }
-
     int loadedCount = 0;
 
     for (const auto& item : root["data"]) {
