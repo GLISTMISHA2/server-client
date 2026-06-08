@@ -23,7 +23,9 @@
 4. Обновить github-репозиторий, доработать README.md.
 
 ## Результаты
-![alt text](<Снимок экрана 2026-05-25 105654.png>)
+
+<img width="1409" height="944" alt="Снимок экрана 2026-05-25 105654" src="https://github.com/user-attachments/assets/d6b0d4a6-24df-4661-ac74-3d7160859783" />
+
 
 ## Практическая работа №14 "Отрисовка OpenStreetMap карты"
 
